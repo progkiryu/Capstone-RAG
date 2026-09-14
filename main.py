@@ -44,8 +44,6 @@ if __name__ == "__main__":
     gc.collect()
     torch.cuda.empty_cache()
 
-    print(torch.cuda.is_available())
-
     uses_judge = args.pipeline in LLM_JUDGE_PIPELINES
     print(f"Pipeline: {args.pipeline} | Model: {args.model} | "
           f"Judge: {args.judge if uses_judge else 'n/a (heuristic scoring)'}")

@@ -1,2 +1,4 @@
 data/hallucination/**
 data/injection/**
+
+.env
