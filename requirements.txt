@@ -9,7 +9,18 @@ langchain-openai==1.5.2
 langchain-google-genai==4.3.4
 langchain-huggingface==1.2.2
 langchain-text-splitters==1.1.2
-openai==3.3.0
+# llama-index-llms-openai requires openai<3 (langchain-openai accepts >=2.45)
+openai==2.54.0
+
+# LlamaIndex (--framework llamaindex)
+llama-index-core==0.14.24
+llama-index-llms-openai==0.8.1
+llama-index-llms-google-genai==0.11.2
+llama-index-llms-huggingface==0.8.0
+llama-index-embeddings-openai==0.7.0
+llama-index-readers-file==0.7.0
+llama-index-retrievers-bm25==0.8.0
+llama-index-vector-stores-faiss==0.7.0
 
 # local HuggingFace models (qwen, deepseek)
 torch==2.10.0

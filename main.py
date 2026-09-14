@@ -5,9 +5,12 @@ import json
 import torch
 import gc
 
-from config import MODELS, get_llm
+from config import FRAMEWORKS, MODELS, get_llm
 
 PIPELINES = ["baseline", "pre_processing", "post_processing", "combined"]
+
+# pipeline class exported by RAG/<framework>/<pipeline>/pipeline.py
+PIPELINE_CLASSES = {"langchain": "LCPipeline", "llamaindex": "LIPipeline"}
 
 # pipelines whose evaluator is an LLM claim judge (the rest use heuristic scoring)
 LLM_JUDGE_PIPELINES = {"post_processing", "combined"}
@@ -17,8 +20,10 @@ DATA_DIR = "data/hallucination"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run RAG hallucination tests")
+    parser.add_argument("--framework", choices=FRAMEWORKS, default="langchain",
+                        help="RAG framework the pipeline is built with")
     parser.add_argument("--pipeline", choices=PIPELINES, default="combined",
-                        help="RAG pipeline under RAG/langchain/ to test")
+                        help="RAG pipeline under RAG/<framework>/ to test")
     parser.add_argument("--model", choices=MODELS, default="gpt",
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
@@ -26,16 +31,21 @@ def parse_args():
     return parser.parse_args()
 
 
+def response_text(response):
+    """LangChain chains return an AIMessage; LlamaIndex's llm.predict() returns a str."""
+    return getattr(response, "content", response)
+
+
 def run_case(rag, pipeline_name, question, reference):
     """Return (response_text, score) regardless of the pipeline's evaluate() shape."""
     if pipeline_name in LLM_JUDGE_PIPELINES:
         result = rag.evaluate(question, reference)
-        return result["answer"].content, result["score"]
+        return response_text(result["answer"]), result["score"]
 
     out = rag.query(question)
-    response = out[0] if isinstance(out, tuple) else out
-    score = rag.evaluate(response.content, reference)["final_score"]
-    return response.content, score
+    response = response_text(out[0] if isinstance(out, tuple) else out)
+    score = rag.evaluate(response, reference)["final_score"]
+    return response, score
 
 
 if __name__ == "__main__":
@@ -45,31 +55,32 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
 
     uses_judge = args.pipeline in LLM_JUDGE_PIPELINES
-    print(f"Pipeline: {args.pipeline} | Model: {args.model} | "
+    print(f"Framework: {args.framework} | Pipeline: {args.pipeline} | Model: {args.model} | "
           f"Judge: {args.judge if uses_judge else 'n/a (heuristic scoring)'}")
     if not uses_judge:
         print(f"Note: --judge is ignored for the {args.pipeline} pipeline")
 
-    LCPipeline = importlib.import_module(f"RAG.langchain.{args.pipeline}.pipeline").LCPipeline
+    pipeline_module = importlib.import_module(f"RAG.{args.framework}.{args.pipeline}.pipeline")
+    Pipeline = getattr(pipeline_module, PIPELINE_CLASSES[args.framework])
 
-    # langchain RAG pipeline
-    langChainRAG = LCPipeline(
-        llm=get_llm(args.model),
-        judge_llm=get_llm(args.judge) if uses_judge else None,
-        index_dir=f"./faiss_index/langchain/{args.pipeline}",
+    # RAG pipeline built with the selected framework
+    rag = Pipeline(
+        llm=get_llm(args.model, args.framework),
+        judge_llm=get_llm(args.judge, args.framework) if uses_judge else None,
+        index_dir=f"./faiss_index/{args.framework}/{args.pipeline}",
     )
-    print("LangChain RAG Pipeline Initialized!")
+    print(f"{args.framework} RAG Pipeline Initialized!")
 
     #--------------------
     # HALLUCINATION TEST:
     #--------------------
     # ingest documents
-    langChainRAG.ingest(f"{DATA_DIR}/sl_booklet.pdf")
-    langChainRAG.ingest(f"{DATA_DIR}/sl_business_directory.pdf")
-    langChainRAG.ingest(f"{DATA_DIR}/sl_service_guide.pdf")
-    langChainRAG.ingest(f"{DATA_DIR}/sl_tourist_guide.pdf")
+    rag.ingest(f"{DATA_DIR}/sl_booklet.pdf")
+    rag.ingest(f"{DATA_DIR}/sl_business_directory.pdf")
+    rag.ingest(f"{DATA_DIR}/sl_service_guide.pdf")
+    rag.ingest(f"{DATA_DIR}/sl_tourist_guide.pdf")
 
-    langChainRAG.load_existing()
+    rag.load_existing()
 
     with open(f"{DATA_DIR}/swan_lagoon.json", "r") as f:
         test_cases = json.load(f)
@@ -85,7 +96,7 @@ if __name__ == "__main__":
 
         print(f"Question {count}: {question}")
 
-        response, score = run_case(langChainRAG, args.pipeline, question, answer)
+        response, score = run_case(rag, args.pipeline, question, answer)
         total_end = time.perf_counter()
         total_time = total_end - total_start
 
