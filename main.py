@@ -18,7 +18,7 @@ DATA_DIR = "data/hallucination"
 def parse_args():
     parser = argparse.ArgumentParser(description="Run RAG hallucination tests")
     parser.add_argument("--pipeline", choices=PIPELINES, default="combined",
-                        help="RAG pipeline under RAG/ to test")
+                        help="RAG pipeline under RAG/langchain/ to test")
     parser.add_argument("--model", choices=MODELS, default="gpt",
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
@@ -50,13 +50,13 @@ if __name__ == "__main__":
     if not uses_judge:
         print(f"Note: --judge is ignored for the {args.pipeline} pipeline")
 
-    LCPipeline = importlib.import_module(f"RAG.{args.pipeline}.pipeline").LCPipeline
+    LCPipeline = importlib.import_module(f"RAG.langchain.{args.pipeline}.pipeline").LCPipeline
 
     # langchain RAG pipeline
     langChainRAG = LCPipeline(
         llm=get_llm(args.model),
         judge_llm=get_llm(args.judge) if uses_judge else None,
-        index_dir=f"./faiss_index/{args.pipeline}",
+        index_dir=f"./faiss_index/langchain/{args.pipeline}",
     )
     print("LangChain RAG Pipeline Initialized!")
 
