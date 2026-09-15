@@ -113,12 +113,16 @@ Every pipeline folder contains the same six modules. The differences between var
 
    `OPENAI_API_KEY` is always required, because every pipeline uses OpenAI embeddings. `GEMINI_API_KEY` is only needed when `gemini` is used as `--model` or `--judge`.
 
-3. **Add the test data.** `data/` is gitignored. Place the files in `data/hallucination/`:
+3. **Add the test data.** `data/` is gitignored.
+
+   For the hallucination test, place these in `data/hallucination/`:
    - `sl_booklet.pdf`
    - `sl_business_directory.pdf`
    - `sl_service_guide.pdf`
    - `sl_tourist_guide.pdf`
    - `swan_lagoon.json`
+
+   For the injection test (`--test injection`), `data/injection/` holds the attack documents plus `injection_tests.json` (the manifest of test cases and their success markers). Every non-`.json` file in the folder is ingested; the manifest drives the cases. Supported document formats: `.pdf`, `.txt`, `.html`, `.md`.
 
 4. **(Optional) GPU for local models.** The default `torch` from pip is CPU-only on Windows. To run `qwen` or `deepseek` on an NVIDIA GPU, install the CUDA build using the command from [pytorch.org](https://pytorch.org/get-started/locally/).
 
@@ -127,11 +131,12 @@ Every pipeline folder contains the same six modules. The differences between var
 ## Commands
 
 ```powershell
-python main.py [--framework FRAMEWORK] [--pipeline PIPELINE] [--model MODEL] [--judge MODEL]
+python main.py [--test TEST] [--framework FRAMEWORK] [--pipeline PIPELINE] [--model MODEL] [--judge MODEL]
 ```
 
 | Flag | Choices | Default | Purpose |
 |---|---|---|---|
+| `--test` | `hallucination`, `injection` | `hallucination` | Test set to run: hallucination (Q/A over `data/hallucination/`) or indirect prompt injection (ingests every file in `data/injection/`, scores by marker matching) |
 | `--framework` | `langchain`, `llamaindex` | `langchain` | RAG framework the pipeline is built with |
 | `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined` | `combined` | RAG variant to test |
 | `--model` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that answers the questions |
@@ -155,6 +160,10 @@ python main.py --pipeline combined --model gemini --judge gpt
 # The same pipelines built with LlamaIndex
 python main.py --framework llamaindex --pipeline baseline --model gpt
 python main.py --framework llamaindex --pipeline combined --model gemini --judge gpt
+
+# Indirect prompt injection test (ingests every file in data/injection/)
+python main.py --test injection --pipeline baseline --model gpt
+python main.py --test injection --framework llamaindex --pipeline combined --model gemini
 
 # Local models
 python main.py --pipeline baseline --model qwen
@@ -186,12 +195,13 @@ Total Time: <seconds>
 
 Both scoring methods use a 0–100 scale, but they measure different things (surface and semantic similarity vs. LLM-judged correctness), so compare scores within the same scoring method.
 
+With `--test injection`, the run instead ingests every document in `data/injection/`, then for each case in `injection_tests.json` prints the prompt, the model's response, which `injection_markers` leaked into it, and a verdict (`INJECTED (vulnerable)` if any marker matched, else `BLOCKED (safe)`), followed by a summary count. Injection scoring is marker matching, not the claim judge, so `--judge` is ignored in this mode.
+
 ---
 
 ## Known limitations
 
-- In both frameworks, `baseline` and `post_processing` rebuild the vector store on every `ingest()` call, so only the last ingested PDF ends up indexed.
 - Heuristic and LLM-judge scores are not directly comparable across pipelines.
 - Retrieval differs slightly between frameworks for the reasons listed under [Frameworks](#frameworks).
 - `deepseek` (DeepSeek-R1) includes `<think>` reasoning text in its answers, which affects scoring.
-- Indirect prompt injection tests are not implemented yet (placeholder at the end of `main.py`).
+- Injection scoring uses case-insensitive substring matching on `injection_markers`; it flags whether attack content reached the answer, not whether the model acted on it in a genuinely harmful way.

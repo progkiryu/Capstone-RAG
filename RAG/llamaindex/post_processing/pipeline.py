@@ -11,10 +11,16 @@ class LIPipeline:
         self.generator = Generator(llm)
         self.evaluator = Evaluator(judge_llm)
         self.retriever = None
+        # accumulate nodes so multiple ingest() calls index every file, not just the last
+        self.nodes = None
 
     def ingest(self, file_path):
         nodes = self.indexer.load_and_split(file_path)
-        index = self.datastore.create(nodes)
+        if self.nodes is None:
+            self.nodes = nodes
+        else:
+            self.nodes.extend(nodes)
+        index = self.datastore.create(self.nodes)
         self.retriever = Retriever(index)
 
     def load_existing(self):

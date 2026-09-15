@@ -12,10 +12,16 @@ class LCPipeline:
         self.generator = Generator(llm)
         self.evaluator = Evaluator()
         self.retriever = None
+        # accumulate docs so multiple ingest() calls index every file, not just the last
+        self.docs = None
 
     def ingest(self, file_path):
         docs = self.indexer.load_and_split(file_path)
-        db = self.datastore.create(docs)
+        if self.docs is None:
+            self.docs = docs
+        else:
+            self.docs.extend(docs)
+        db = self.datastore.create(self.docs)
         self.retriever = Retriever(db)
 
     def load_existing(self):

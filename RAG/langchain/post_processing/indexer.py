@@ -1,5 +1,5 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
+from .._loaders import load_documents
 
 class Indexer:
   def __init__(self, chunk_size=500, chunk_overlap=50):
@@ -9,8 +9,7 @@ class Indexer:
     )
 
   def load_and_split(self, file_path):
-    loader = PyPDFLoader(file_path)
-    documents = loader.load()
+    documents = load_documents(file_path)
 
     splitter = RecursiveCharacterTextSplitter(
       chunk_size=1000,

@@ -1,12 +1,5 @@
-import logging
 from llama_index.core.node_parser import SentenceSplitter
-
-# importing llama_index.readers.file runs logging.basicConfig(level=INFO), which prints every
-# HTTP request; restore the root logger afterwards so output matches the LangChain pipelines
-_root_handlers, _root_level = logging.root.handlers[:], logging.root.level
-from llama_index.readers.file import PDFReader
-logging.root.handlers = _root_handlers
-logging.root.setLevel(_root_level)
+from .._loaders import load_documents
 
 class Indexer:
   def __init__(self, chunk_size=1000, chunk_overlap=200):
@@ -20,7 +13,7 @@ class Indexer:
     )
 
   def load_and_split(self, file_path):
-    documents = PDFReader().load_data(file_path)
+    documents = load_documents(file_path)
 
     # keep metadata out of the embedded and prompt text, as LangChain does
     for document in documents:
