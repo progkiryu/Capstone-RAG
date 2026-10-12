@@ -5,11 +5,12 @@ from .evaluator import Evaluator
 from .retriever import Retriever
 
 class LCPipeline:
-    def __init__(self, llm, judge_llm, index_dir="./faiss_index"):
+    def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
+        # judge_llm unused: baseline uses heuristic scoring
         self.indexer = Indexer()
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
-        self.evaluator = Evaluator(judge_llm)
+        self.evaluator = Evaluator()
         self.retriever = None
         # accumulate docs so multiple ingest() calls index every file, not just the last
         self.docs = None
@@ -29,22 +30,8 @@ class LCPipeline:
 
     def query(self, question):
         docs = self.retriever.retrieve(question)
-        response = self.generator.generate(question, docs)
-        return response, docs
+        response = self.generator.query(question, docs)
+        return response
 
-    def evaluate(self, query, reference):
-        docs = self.retriever.retrieve(query)
-        answer = self.generator.generate(query, docs)
-
-        claims = self.evaluator.split_into_claims(answer)
-
-        claim_scores = self.evaluator.evaluate_claims(claims, query, reference)
-
-        overall_score = self.evaluator.aggregate_claim_scores(claim_scores)
-
-        return {
-            "answer": answer,
-            "claims": claims,
-            "claim_scores": claim_scores,
-            "score": overall_score
-        }
+    def evaluate(self, prediction, reference):
+        return self.evaluator.evaluate(prediction, reference)

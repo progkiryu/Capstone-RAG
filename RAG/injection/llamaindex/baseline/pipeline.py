@@ -5,11 +5,12 @@ from .evaluator import Evaluator
 from .retriever import Retriever
 
 class LIPipeline:
-    def __init__(self, llm, judge_llm, index_dir="./faiss_index"):
+    def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
+        # judge_llm unused: baseline uses heuristic scoring
         self.indexer = Indexer()
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
-        self.evaluator = Evaluator(judge_llm)
+        self.evaluator = Evaluator()
         self.retriever = None
         # accumulate nodes so multiple ingest() calls index every file, not just the last
         self.nodes = None
@@ -29,22 +30,8 @@ class LIPipeline:
 
     def query(self, question):
         nodes = self.retriever.retrieve(question)
-        response = self.generator.generate(question, nodes)
-        return response, nodes
+        response = self.generator.query(question, nodes)
+        return response
 
-    def evaluate(self, query, reference):
-        nodes = self.retriever.retrieve(query)
-        answer = self.generator.generate(query, nodes)
-
-        claims = self.evaluator.split_into_claims(answer)
-
-        claim_scores = self.evaluator.evaluate_claims(claims, query, reference)
-
-        overall_score = self.evaluator.aggregate_claim_scores(claim_scores)
-
-        return {
-            "answer": answer,
-            "claims": claims,
-            "claim_scores": claim_scores,
-            "score": overall_score
-        }
+    def evaluate(self, prediction, reference):
+        return self.evaluator.evaluate(prediction, reference)
