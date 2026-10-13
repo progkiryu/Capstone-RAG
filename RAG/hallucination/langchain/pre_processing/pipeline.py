@@ -5,6 +5,8 @@ from .evaluator import Evaluator
 from .retriever import Retriever
 from .filter import NLIFilter
 from .compressor import Compressor
+from .rewriter import Rewriter
+from .grader import Grader, AMBIGUOUS, INCORRECT, NOT_FOUND
 
 class LCPipeline:
     def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
@@ -13,6 +15,8 @@ class LCPipeline:
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
         self.evaluator = Evaluator()
+        self.rewriter = Rewriter(llm)
+        self.grader = Grader(llm)
         self.nli_filter = NLIFilter()
         self.compressor = Compressor()
         self.retriever = None
@@ -35,7 +39,17 @@ class LCPipeline:
         self.retriever = Retriever(db, self.docs)
 
     def query(self, question):
-        docs = self.retriever.retrieve(question)
+        search_query, _ = self.rewriter.rewrite(question)
+        docs = self.retriever.retrieve(search_query)
+
+        grade, _ = self.grader.grade(question, docs)
+        if grade == AMBIGUOUS:
+            # one retry with a different rewrite, never re-graded, so this cannot loop
+            retry_query, _ = self.rewriter.rewrite(question, previous=search_query)
+            docs = self.retriever.retrieve(retry_query)
+        if grade == INCORRECT:
+            return NOT_FOUND, docs
+
         docs = self.nli_filter.filter(question, docs)
         docs = self.compressor.compress(question, docs)
         response = self.generator.query(question, docs)
