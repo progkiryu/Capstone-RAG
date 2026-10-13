@@ -17,9 +17,13 @@ PIPELINE_CLASSES = {"langchain": "LCPipeline", "llamaindex": "LIPipeline"}
 # pipelines whose evaluator is an LLM claim judge (the rest use heuristic scoring)
 LLM_JUDGE_PIPELINES = {"post_processing", "combined"}
 
-# injection pre_processing defence conditions: P0 none, P1 sanitise, P2 + heuristics,
-# P3 + classifier, P4 safe prompt only, P5 full stack
-CONDITIONS = ["P0", "P1", "P2", "P3", "P4", "P5"]
+# injection defence conditions per pipeline: pre_processing P0 none ... P5 full stack;
+# post_processing Q0 none ... Q5 full stack, Q6 full stack + regeneration
+CONDITIONS = {
+    "pre_processing": ["P0", "P1", "P2", "P3", "P4", "P5"],
+    "post_processing": ["Q0", "Q1", "Q2", "Q3a", "Q3b", "Q4", "Q5", "Q6"],
+}
+DEFAULT_CONDITIONS = {"pre_processing": "P5", "post_processing": "Q5"}
 
 DATA_DIR = "data/hallucination"
 INJECTION_DIR = "data/injection"
@@ -39,10 +43,20 @@ def parse_args():
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
                         help="LLM used to score answers (post_processing/combined only)")
-    parser.add_argument("--condition", choices=CONDITIONS, default="P5",
-                        help="Defence condition for the injection pre_processing pipeline: P0 none, "
-                             "P1 sanitise, P2 +heuristics, P3 +classifier, P4 safe prompt only, P5 full stack")
-    return parser.parse_args()
+    parser.add_argument("--condition", choices=[c for conditions in CONDITIONS.values() for c in conditions],
+                        help="Injection defence condition. pre_processing: P0 none, P1 sanitise, "
+                             "P2 +heuristics, P3 +classifier, P4 safe prompt only, P5 full stack (default). "
+                             "post_processing: Q0 none, Q1 canary + link filter, Q2 +task alignment, "
+                             "Q3a/Q3b +groundedness (all/unflagged chunks), Q4 +LLM judge, "
+                             "Q5 full stack (default), Q6 full stack + regeneration")
+    args = parser.parse_args()
+    if args.test == "injection" and args.pipeline in CONDITIONS:
+        if args.condition is None:
+            args.condition = DEFAULT_CONDITIONS[args.pipeline]
+        elif args.condition not in CONDITIONS[args.pipeline]:
+            parser.error(f"--condition {args.condition} does not apply to the {args.pipeline} pipeline "
+                         f"(choose from {', '.join(CONDITIONS[args.pipeline])})")
+    return args
 
 
 def response_text(response):
@@ -83,13 +97,14 @@ if __name__ == "__main__":
     # post_processing/combined build a judge-backed evaluator at construction, so the
     # judge LLM must exist for them even in injection mode -- it just goes unused there,
     # since injection scores by marker matching rather than the claim judge.
+    # injection post_processing uses the judge LLM as its injection verifier (Q4-Q6)
     needs_judge = args.pipeline in LLM_JUDGE_PIPELINES
-    uses_judge = needs_judge and args.test == "hallucination"
+    uses_judge = needs_judge and (args.test == "hallucination" or args.pipeline == "post_processing")
     print(f"Test: {args.test} | Framework: {args.framework} | Pipeline: {args.pipeline} | "
           f"Model: {args.model} | Judge: {args.judge if uses_judge else 'n/a'}")
     if needs_judge and not uses_judge:
         print("Note: --judge is ignored (the injection test scores by marker matching)")
-    uses_condition = args.test == "injection" and args.pipeline == "pre_processing"
+    uses_condition = args.test == "injection" and args.pipeline in CONDITIONS
     if uses_condition:
         print(f"Defence condition: {args.condition}")
 
