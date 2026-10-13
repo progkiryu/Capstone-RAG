@@ -3,7 +3,9 @@ from .datastore import Datastore
 from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
-from .verifier import answer_text, split_claims, support_matrix
+from .verifier import (
+    CLAIM_SUPPORT_THRESHOLD, answer_text, provenance, revise, split_claims, support_matrix
+)
 
 class LCPipeline:
     def __init__(self, llm, judge_llm, index_dir="./faiss_index"):
@@ -36,9 +38,25 @@ class LCPipeline:
 
     # sees only the question, the draft and the retrieved context, never the reference
     def verify(self, question, draft, chunks):
-        claims = [draft[start:end] for start, end in split_claims(draft)]
-        nli = support_matrix(question, claims, chunks).max(axis=1) if claims else []
-        return {"answer": draft, "draft": draft, "claims": claims, "nli_support": [float(score) for score in nli]}
+        spans = split_claims(draft)
+        claims = [draft[start:end] for start, end in spans]
+        report = {"draft": draft, "claims": claims, "answer": draft}
+        if not claims:
+            return report
+
+        matrix = support_matrix(question, claims, chunks)
+        support = [float(score) for score in matrix.max(axis=1)]
+        keep = [score >= CLAIM_SUPPORT_THRESHOLD for score in support]
+        records, coverage = provenance(claims, matrix, keep)
+
+        # every claim failing is left to the abstention gate
+        if any(keep):
+            report["answer"] = revise(draft, spans, keep)
+        report.update(
+            nli_support=support, kept=keep, dropped=keep.count(False),
+            provenance=records, coverage=coverage,
+        )
+        return report
 
     def evaluate(self, question, reference):
         answer, _ = self.query(question)

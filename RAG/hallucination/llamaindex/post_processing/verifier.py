@@ -7,6 +7,8 @@ from sentence_transformers import CrossEncoder
 NLI_MODEL = "cross-encoder/nli-deberta-v3-base"
 FALLBACK_MODEL = "cross-encoder/qnli-electra-base"
 MIN_CLAIM_TOKENS = 3
+CLAIM_SUPPORT_THRESHOLD = 0.5
+PROVENANCE_THRESHOLD = 0.5
 
 
 def _load_model():
@@ -65,3 +67,24 @@ def support_matrix(question, claims, chunks):
     # drafts are often bare fragments ("1962") that entail nothing alone, while prefixing the
     # question hurts some full sentences; a claim counts as supported under either reading
     return np.maximum(score(claims), score([f"{question} {claim}" for claim in claims]))
+
+
+def revise(draft, spans, keep):
+    # rebuilt only from slices of the draft (claims plus the whitespace that preceded them),
+    # so a revision can never contain text the draft did not
+    pieces = []
+    for i, ((start, end), kept) in enumerate(zip(spans, keep)):
+        if kept:
+            if pieces:
+                pieces.append(draft[spans[i - 1][1]:start])
+            pieces.append(draft[start:end])
+    return "".join(pieces)
+
+
+def provenance(claims, matrix, keep):
+    records = [
+        {"claim": claim, "chunk": int(row.argmax()), "nli": float(row.max())}
+        for claim, row, kept in zip(claims, matrix, keep) if kept
+    ]
+    covered = sum(record["nli"] >= PROVENANCE_THRESHOLD for record in records)
+    return records, (100 * covered / len(records) if records else 0.0)
