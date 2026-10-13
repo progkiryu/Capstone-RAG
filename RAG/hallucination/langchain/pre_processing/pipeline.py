@@ -1,3 +1,6 @@
+import time
+from contextlib import contextmanager
+
 from .indexer import Indexer
 from .datastore import Datastore
 from .generator import Generator
@@ -7,6 +10,18 @@ from .filter import NLIFilter
 from .compressor import Compressor
 from .rewriter import Rewriter
 from .grader import Grader, AMBIGUOUS, INCORRECT, NOT_FOUND
+
+
+@contextmanager
+def timed(timings, stage):
+    start = time.perf_counter()
+    yield
+    timings[stage] = timings.get(stage, 0.0) + time.perf_counter() - start
+
+
+def chars(docs):
+    return sum(len(doc.page_content) for doc in docs)
+
 
 class LCPipeline:
     def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
@@ -39,21 +54,49 @@ class LCPipeline:
         self.retriever = Retriever(db, self.docs)
 
     def query(self, question):
-        search_query, _ = self.rewriter.rewrite(question)
-        docs = self.retriever.retrieve(search_query)
+        timings = {}
+        with timed(timings, "rewrite"):
+            search_query, rewritten = self.rewriter.rewrite(question)
+        with timed(timings, "retrieve"):
+            docs = self.retriever.retrieve(search_query)
+        with timed(timings, "grade"):
+            grade, parsed = self.grader.grade(question, docs)
+        llm_calls = 2
 
-        grade, _ = self.grader.grade(question, docs)
         if grade == AMBIGUOUS:
             # one retry with a different rewrite, never re-graded, so this cannot loop
-            retry_query, _ = self.rewriter.rewrite(question, previous=search_query)
-            docs = self.retriever.retrieve(retry_query)
+            with timed(timings, "retry"):
+                retry_query, _ = self.rewriter.rewrite(question, previous=search_query)
+                docs = self.retriever.retrieve(retry_query)
+            llm_calls += 1
+        retrieved = docs
+
         if grade == INCORRECT:
+            self.report(retrieved, None, None, grade, parsed, rewritten, llm_calls, timings)
             return NOT_FOUND, docs
 
-        docs = self.nli_filter.filter(question, docs)
-        docs = self.compressor.compress(question, docs)
+        with timed(timings, "nli"):
+            filtered = self.nli_filter.filter(question, retrieved)
+        with timed(timings, "compress"):
+            docs = self.compressor.compress(question, filtered)
+        self.report(retrieved, filtered, docs, grade, parsed, rewritten, llm_calls, timings)
+
         response = self.generator.query(question, docs)
         return response, docs
+
+    def report(self, retrieved, filtered, compressed, grade, parsed, rewritten, llm_calls, timings):
+        # the first retrieval is what baseline also pays; everything else is added by the measures
+        added = sum(seconds for stage, seconds in timings.items() if stage != "retrieve")
+        breakdown = " ".join(f"{stage} {seconds:.2f}" for stage, seconds in timings.items())
+        after_nli = len(filtered) if filtered is not None else "-"
+        after_compression = (
+            f"{len(compressed)} ({chars(retrieved)}->{chars(compressed)} chars)"
+            if compressed is not None else "-"
+        )
+        print(f"Pre-processing: retrieved={len(retrieved)} nli={after_nli} "
+              f"compressed={after_compression} grade={grade}{'' if parsed else ' (unparsed, failed open)'} "
+              f"rewrite={'used' if rewritten else 'rejected'} llm_calls=+{llm_calls} "
+              f"added={added:.2f}s [{breakdown}]")
 
     def evaluate(self, prediction, reference):
         return self.evaluator.evaluate(prediction, reference)

@@ -8,16 +8,32 @@ Four pipeline variants (a baseline and three mitigations) are implemented in two
 
 ## Pipeline variants
 
-Each variant lives in its own folder under `RAG/<framework>/` and is selected with `--pipeline`.
+Each variant lives in its own folder under `RAG/<test>/<framework>/` and is selected with `--pipeline`.
 
 | Pipeline | Pre-processing (before generation) | Post-processing (after generation) | Scoring |
 |---|---|---|---|
 | `baseline` | None: PDF split into 1000-char chunks (200 overlap), top-16 FAISS similarity search | None | Heuristic |
-| `pre_processing` | 800-char chunks (150 overlap) with custom separators and source metadata; query normalisation; hybrid retrieval (MMR + FAISS with distance threshold + BM25); numeric-signal boosting (ABNs, phone numbers, long IDs); deduplication and re-ranking | None | Heuristic |
+| `pre_processing` | Nine hallucination measures, listed below (implemented under `RAG/hallucination/` only) | None | Heuristic |
 | `post_processing` | None (same retrieval as `baseline`) | Answer split into sentence-level claims (NLTK); each claim judged 0–100 by an LLM; scores averaged | LLM judge |
 | `combined` | Same as `pre_processing` | Same as `post_processing` | LLM judge |
 
 All variants embed chunks with OpenAI `text-embedding-3-small` and store them in a FAISS `IndexFlatL2` index.
+
+**`pre_processing` measures**, applied per question in this order: rewrite (6) → normalise (2) → hybrid retrieve (3, 4) → boost, dedupe and re-rank (5) → grade (7) → NLI filter (8) → compress (9) → generate.
+
+| # | Measure | Module | What it does |
+|---|---|---|---|
+| 1 | Chunking | `indexer.py` | 800-char chunks, 150 overlap, separator hierarchy `\n\n`, `\n`, `.`, space; source file path stored on every chunk |
+| 2 | Query normalisation | `retriever.py` | Lower-case, strip and collapse whitespace before embedding and BM25 |
+| 3 | Hybrid retrieval | `retriever.py` | Union of MMR (`k=16`, `fetch_k=48`, `lambda_mult=0.5`), dense top-10 and BM25 top-16 |
+| 4 | Distance threshold | `retriever.py` | Dense hits kept only at FAISS squared-L2 distance ≤ 0.35 |
+| 5 | Numeric-signal re-ranking | `retriever.py` | Chunks scored for ABNs (+5), AU phone numbers (+4), other phone numbers (+3) and 6+ digit IDs (+2), plus +2 if the query appears verbatim; deduplicated by content, top 16 kept |
+| 6 | Query rewriting | `rewriter.py` | One LLM call turns the question into a search query, keeping proper nouns and numbers verbatim; the original question is used if the rewrite is empty, over 3× longer or drops a number |
+| 7 | Corrective retrieval grading | `grader.py` | One LLM call grades the retrieved context (first 12,000 chars) `CORRECT`, `AMBIGUOUS` or `INCORRECT`. `AMBIGUOUS` re-retrieves once with a second, different rewrite (one more LLM call, not re-graded); `INCORRECT` skips generation and answers `Not found in context`; an unreadable grade counts as `CORRECT` |
+| 8 | NLI relevance filter | `filter.py` | `cross-encoder/nli-deberta-v3-base` (fallback `cross-encoder/qnli-electra-base`) scores each (question, chunk) pair; chunks with relevance below 0.5 are dropped, keeping the top 3 if none pass. Relevance is 1 − P(contradiction), because a passage never entails a question |
+| 9 | Extractive compression | `compressor.py` | Chunks split into sentences (NLTK); sentences with `all-MiniLM-L6-v2` cosine similarity to the question below 0.3 are dropped, always keeping each chunk's best sentence |
+
+Measures 6 and 7 add two LLM calls per question (three when the grade is `AMBIGUOUS`); measures 1–5, 8 and 9 run without LLM calls. Each question prints a one-line summary: chunks retrieved, after NLI and after compression, the grade, whether the rewrite was used, LLM calls added and the added latency.
 
 **Scoring methods**
 - **Heuristic** (`evaluator.py` in `baseline` and `pre_processing`): weighted mix of exact match (40%), fuzzy match (20%), embedding similarity using `all-MiniLM-L6-v2` (30%) and keyword overlap (10%), on a 0–100 scale.
@@ -35,7 +51,7 @@ Selected with `--framework`. Both frameworks implement every variant with the sa
 | Chunking | `RecursiveCharacterTextSplitter` | `SentenceSplitter`, sized in characters |
 | Embeddings | `OpenAIEmbeddings` | `OpenAIEmbedding` |
 | Vector store | `FAISS` | `VectorStoreIndex` on `FaissVectorStore` |
-| MMR | `max_marginal_relevance_search` | FAISS top-12 re-ranked with LlamaIndex's MMR |
+| MMR | `max_marginal_relevance_search_by_vector` | FAISS top-48 re-ranked with LlamaIndex's MMR (`get_top_k_mmr_embeddings`) |
 | BM25 | `BM25Retriever` (`rank_bm25`) | `BM25Retriever` (`bm25s`) |
 | Prompts and LLM calls | `ChatPromptTemplate` piped into LangChain chat models | `ChatPromptTemplate` with `llm.predict()` on LlamaIndex LLMs |
 | Pipeline class | `LCPipeline` | `LIPipeline` |
@@ -43,8 +59,8 @@ Selected with `--framework`. Both frameworks implement every variant with the sa
 Differences that remain by design, because each framework uses its own components:
 - **BM25 tokenisation**: LangChain splits on whitespace and matches case-sensitively (against a lower-cased query); LlamaIndex lower-cases, stems and removes stopwords.
 - **Embedding input**: LlamaIndex's OpenAI embeddings replace newlines with spaces before embedding; LangChain sends the text unchanged.
-- **MMR**: LlamaIndex penalises similarity to the most recently selected chunk, LangChain to all selected chunks. Because `fetch_k` (12) is below `k` (16), both return the same 12 chunks, in a different order.
-- **Chunk boundaries**: the splitters use different rules for where to break text, so chunks of the same size can start and end in different places.
+- **MMR**: `FaissVectorStore` has no MMR mode, so LlamaIndex fetches the 48 nearest chunks and re-ranks them with `get_top_k_mmr_embeddings`. LlamaIndex penalises similarity to the most recently selected chunk, LangChain to all selected chunks; with `fetch_k` (48) above `k` (16) the two can select different chunks.
+- **Retrieved sets in `pre_processing`**: because of the BM25, MMR and chunk-boundary differences above, the two frameworks retrieve 16 chunks per question but share only about 55% of them at page level, so chunk counts after the NLI filter can differ by several chunks. On the same chunks the NLI filter agrees to within 2 of 42.- **Chunk boundaries**: the splitters use different rules for where to break text, so chunks of the same size can start and end in different places.
 
 ---
 
@@ -183,7 +199,7 @@ foreach ($f in 'langchain','llamaindex') {
 
 ## Output
 
-Each run first prints the selected framework, pipeline, model and judge, ingests the PDFs into `faiss_index/<framework>/<pipeline>/`, then prints for each of the 25 test cases:
+Each run first prints the selected framework, pipeline, model and judge, ingests the PDFs into `faiss_index/<test>/<framework>/<pipeline>/`, then prints for each of the 25 test cases:
 
 ```
 Question 1: Who discovered gold in Swan Lagoon and founded the town?
