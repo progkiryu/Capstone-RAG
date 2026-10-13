@@ -17,6 +17,10 @@ PIPELINE_CLASSES = {"langchain": "LCPipeline", "llamaindex": "LIPipeline"}
 # pipelines whose evaluator is an LLM claim judge (the rest use heuristic scoring)
 LLM_JUDGE_PIPELINES = {"post_processing", "combined"}
 
+# injection pre_processing defence conditions: P0 none, P1 sanitise, P2 + heuristics,
+# P3 + classifier, P4 safe prompt only, P5 full stack
+CONDITIONS = ["P0", "P1", "P2", "P3", "P4", "P5"]
+
 DATA_DIR = "data/hallucination"
 INJECTION_DIR = "data/injection"
 INJECTION_MANIFEST = "injection_tests.json"
@@ -35,6 +39,9 @@ def parse_args():
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
                         help="LLM used to score answers (post_processing/combined only)")
+    parser.add_argument("--condition", choices=CONDITIONS, default="P5",
+                        help="Defence condition for the injection pre_processing pipeline: P0 none, "
+                             "P1 sanitise, P2 +heuristics, P3 +classifier, P4 safe prompt only, P5 full stack")
     return parser.parse_args()
 
 
@@ -82,6 +89,9 @@ if __name__ == "__main__":
           f"Model: {args.model} | Judge: {args.judge if uses_judge else 'n/a'}")
     if needs_judge and not uses_judge:
         print("Note: --judge is ignored (the injection test scores by marker matching)")
+    uses_condition = args.test == "injection" and args.pipeline == "pre_processing"
+    if uses_condition:
+        print(f"Defence condition: {args.condition}")
 
     pipeline_module = importlib.import_module(f"RAG.{args.test}.{args.framework}.{args.pipeline}.pipeline")
     Pipeline = getattr(pipeline_module, PIPELINE_CLASSES[args.framework])
@@ -91,6 +101,7 @@ if __name__ == "__main__":
         llm=get_llm(args.model, args.framework),
         judge_llm=get_llm(args.judge, args.framework) if needs_judge else None,
         index_dir=f"./faiss_index/{args.test}/{args.framework}/{args.pipeline}",
+        **({"condition": args.condition} if uses_condition else {}),
     )
     print(f"{args.framework} RAG Pipeline Initialized!")
 
