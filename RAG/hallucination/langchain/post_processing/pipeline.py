@@ -3,9 +3,13 @@ from .datastore import Datastore
 from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
+from .judge import Judge
 from .verifier import (
     CLAIM_SUPPORT_THRESHOLD, answer_text, provenance, revise, split_claims, support_matrix
 )
+
+NOT_FOUND = "Not found in context"
+
 
 class LCPipeline:
     def __init__(self, llm, judge_llm, index_dir="./faiss_index"):
@@ -13,6 +17,7 @@ class LCPipeline:
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
         self.evaluator = Evaluator(judge_llm)
+        self.judge = Judge(judge_llm)
         self.retriever = None
         # accumulate docs so multiple ingest() calls index every file, not just the last
         self.docs = None
@@ -41,11 +46,17 @@ class LCPipeline:
         spans = split_claims(draft)
         claims = [draft[start:end] for start, end in spans]
         report = {"draft": draft, "claims": claims, "answer": draft}
-        if not claims:
+        # an abstaining draft has nothing to verify
+        if not claims or draft.strip() == NOT_FOUND:
             return report
 
         matrix = support_matrix(question, claims, chunks)
-        support = [float(score) for score in matrix.max(axis=1)]
+        nli_support = [float(score) for score in matrix.max(axis=1)]
+        judge_support = self.judge.judge(question, claims, chunks)
+        if judge_support is None:
+            support = nli_support
+        else:
+            support = [(nli + judged) / 2 for nli, judged in zip(nli_support, judge_support)]
         keep = [score >= CLAIM_SUPPORT_THRESHOLD for score in support]
         records, coverage = provenance(claims, matrix, keep)
 
@@ -53,7 +64,8 @@ class LCPipeline:
         if any(keep):
             report["answer"] = revise(draft, spans, keep)
         report.update(
-            nli_support=support, kept=keep, dropped=keep.count(False),
+            nli_support=nli_support, judge_support=judge_support, support=support,
+            aggregate_support=sum(support) / len(support), kept=keep, dropped=keep.count(False),
             provenance=records, coverage=coverage,
         )
         return report
