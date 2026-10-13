@@ -10,6 +10,11 @@ from .verifier import (
 )
 
 NOT_FOUND = "Not found in context"
+# fixed from the observed support/entropy distributions (no reference answers consulted):
+# abstain when claims are on average unsupported, or when the sampled answers are spread
+# over more meanings than an even three-way split (ln 3)
+SUPPORT_THRESHOLD = 0.5
+ENTROPY_THRESHOLD = 1.10
 
 
 class LCPipeline:
@@ -60,20 +65,32 @@ class LCPipeline:
         else:
             support = [(nli + judged) / 2 for nli, judged in zip(nli_support, judge_support)]
         keep = [score >= CLAIM_SUPPORT_THRESHOLD for score in support]
+        aggregate_support = sum(support) / len(support)
 
         # sampled once and shared by the consistency score and the semantic entropy
         answers = [draft] + self.consistency.sample(question, chunks)
         entropy, clusters = semantic_entropy(question, answers)
-        records, coverage = provenance(claims, matrix, keep)
 
-        # every claim failing is left to the abstention gate
-        if any(keep):
+        reasons = []
+        if aggregate_support < SUPPORT_THRESHOLD:
+            reasons.append("support")
+        if entropy > ENTROPY_THRESHOLD:
+            reasons.append("entropy")
+        if not any(keep):
+            reasons.append("all claims failed")
+
+        if reasons:
+            report["answer"], records, coverage = NOT_FOUND, [], None
+        else:
             report["answer"] = revise(draft, spans, keep)
+            records, coverage = provenance(claims, matrix, keep)
+
         report.update(
             nli_support=nli_support, judge_support=judge_support, support=support,
-            aggregate_support=sum(support) / len(support), kept=keep, dropped=keep.count(False),
-            provenance=records, coverage=coverage, samples=answers[1:],
-            consistency=consistency_score(answers), entropy=entropy, clusters=clusters,
+            aggregate_support=aggregate_support, kept=keep, dropped=keep.count(False),
+            samples=answers[1:], consistency=consistency_score(answers), entropy=entropy,
+            clusters=clusters, abstained=bool(reasons), abstain_reasons=reasons,
+            provenance=records, coverage=coverage,
         )
         return report
 
