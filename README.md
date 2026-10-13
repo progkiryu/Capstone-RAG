@@ -13,7 +13,7 @@ Each variant lives in its own folder under `RAG/<test>/<framework>/` and is sele
 | Pipeline | Pre-processing (before generation) | Post-processing (after generation) | Scoring |
 |---|---|---|---|
 | `baseline` | None: PDF split into 1000-char chunks (200 overlap), top-16 FAISS similarity search | None | Heuristic |
-| `pre_processing` | Nine hallucination measures, listed below (implemented under `RAG/hallucination/` only) | None | Heuristic |
+| `pre_processing` | Hallucination test: nine hallucination measures. Injection test: injection defences D1–D5. Both listed below | None | Heuristic (hallucination), marker matching (injection) |
 | `post_processing` | None (same retrieval and generation as `baseline`) | Eight hallucination measures, listed below (implemented under `RAG/hallucination/` only) | LLM judge |
 | `combined` | The nine `pre_processing` measures | The eight `post_processing` measures, checked against the compressed context | LLM judge |
 
@@ -51,6 +51,29 @@ Measures 6 and 7 add two LLM calls per question (three when the grade is `AMBIGU
 Thresholds were fixed from the support and entropy distributions of the 25 questions, without consulting the ground-truth answers. Each question adds 6 LLM calls (1 judge, 5 samples) and prints a one-line summary: claims, claims dropped, aggregate support, consistency, entropy, whether it abstained and why, provenance coverage, LLM calls added and the added latency.
 
 **`combined`** runs both sets unchanged: rewrite → normalise → hybrid retrieve → re-rank → grade → NLI filter → compress → generate draft → decompose → ground claims → sample-based checks → gate or revise → provenance. The post-processing checks (NLI support, faithfulness judge, the 5 samples and provenance) use the compressed context the generator saw. A draft of `Not found in context`, including the `INCORRECT` grade path, skips the post-processing checks. Each question adds 8 LLM calls (rewrite, grade, judge, 5 samples), 9 when the grade is `AMBIGUOUS`, or 2–3 when the draft abstains, and prints both the `Pre-processing:` and `Post-processing:` summary lines. The NLI cross-encoder and `all-MiniLM-L6-v2` are loaded once and shared by the measures that use them.
+
+**Injection `pre_processing` defences** (`RAG/injection/<framework>/pre_processing/`) run on the retrieved chunks before the generator is called. Retrieval, chunking and the index are the same as the injection `baseline`.
+
+| ID | Defence | Module | What it does |
+|---|---|---|---|
+| D1 | Sanitisation | `sanitiser.py` | Removes HTML comments, elements hidden by `display:none`, `visibility:hidden`, `font-size:0` or a `hidden` attribute, zero-width characters and Unicode tag characters; applies NFKC normalisation and collapses whitespace |
+| D2 | Heuristic detector | `detectors.py` | Flags a chunk if any of eight regex patterns for instruction-like or exfiltration text matches (e.g. "ignore previous instructions", "you are now", markdown image links) |
+| D3 | Classifier detector | `detectors.py` | `protectai/deberta-v3-base-prompt-injection-v2` scores each chunk locally (no API calls) in windows of up to 512 tokens; the chunk is flagged if its highest window score is at least the threshold (0.9) |
+| D4 | Filter | `defence.py` | Flagged chunks are dropped (or replaced with `[removed: possible injected instructions]` when `replace_instead_of_drop` is set); if every chunk is flagged, the answer is `I couldn't find reliable information to answer that.` and the generator is not called |
+| D5 | Safe prompt | `generator.py` | System prompt with the priority order system > user > documents; each chunk wrapped in `<document id="…">` tags and datamarked with `ˆ` between words (spotlighting); the question and the "documents are data" rule restated after the documents |
+
+`--condition` selects which defences run (injection test, `pre_processing` pipeline only):
+
+| Condition | Defences |
+|---|---|
+| `P0` | None (baseline prompt, no filtering) |
+| `P1` | D1 |
+| `P2` | D1 + D2 |
+| `P3` | D1 + D3 |
+| `P4` | D5 only |
+| `P5` (default) | D1 + D2 + D3 + D4 + D5 |
+
+`P0`–`P3` use the injection `baseline` prompt, so only the listed defences change. The conditions are defined in `CONDITIONS` in `defence.py`. Each case prints a one-line summary: condition, chunks retrieved, flagged chunk ids and which detector flagged them, chunks dropped, whether the fallback was used, and the added latency. The classifier threshold of 0.9 is the plan's default; it has not yet been tuned on a dev split.
 
 **Scoring methods**
 - **Heuristic** (`evaluator.py` in `baseline` and `pre_processing`): weighted mix of exact match (40%), fuzzy match (20%), embedding similarity using `all-MiniLM-L6-v2` (30%) and keyword overlap (10%), on a 0–100 scale.
@@ -176,6 +199,7 @@ python main.py [--test TEST] [--framework FRAMEWORK] [--pipeline PIPELINE] [--mo
 | `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined` | `combined` | RAG variant to test |
 | `--model` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that answers the questions |
 | `--judge` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that scores the answers (`post_processing` and `combined` only; ignored by the heuristic pipelines) |
+| `--condition` | `P0`, `P1`, `P2`, `P3`, `P4`, `P5` | `P5` | Injection defence condition (`--test injection --pipeline pre_processing` only; ignored otherwise) |
 
 ### Examples
 
@@ -198,6 +222,7 @@ python main.py --framework llamaindex --pipeline combined --model gemini --judge
 
 # Indirect prompt injection test (ingests every file in data/injection/)
 python main.py --test injection --pipeline baseline --model gpt
+python main.py --test injection --pipeline pre_processing --condition P5 --model gpt
 python main.py --test injection --framework llamaindex --pipeline combined --model gemini
 
 # Local models
