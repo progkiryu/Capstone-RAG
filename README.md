@@ -14,7 +14,7 @@ Each variant lives in its own folder under `RAG/<test>/<framework>/` and is sele
 |---|---|---|---|
 | `baseline` | None: PDF split into 1000-char chunks (200 overlap), top-16 FAISS similarity search | None | Heuristic |
 | `pre_processing` | Hallucination test: nine hallucination measures. Injection test: injection defences D1–D5. Both listed below | None | Heuristic (hallucination), marker matching (injection) |
-| `post_processing` | None (same retrieval and generation as `baseline`) | Eight hallucination measures, listed below (implemented under `RAG/hallucination/` only) | LLM judge |
+| `post_processing` | None (same retrieval and generation as `baseline`) | Hallucination test: eight hallucination measures. Injection test: injection defences Q1–Q6. Both listed below | LLM judge (hallucination), marker matching (injection) |
 | `combined` | The nine `pre_processing` measures | The eight `post_processing` measures, checked against the compressed context | LLM judge |
 
 All variants embed chunks with OpenAI `text-embedding-3-small` and store them in a FAISS `IndexFlatL2` index.
@@ -74,6 +74,34 @@ Thresholds were fixed from the support and entropy distributions of the 25 quest
 | `P5` (default) | D1 + D2 + D3 + D4 + D5 |
 
 `P0`–`P3` use the injection `baseline` prompt, so only the listed defences change. The conditions are defined in `CONDITIONS` in `defence.py`. Each case prints a one-line summary: condition, chunks retrieved, flagged chunk ids and which detector flagged them, chunks dropped, whether the fallback was used, and the added latency. The classifier threshold of 0.9 is the plan's default; it has not yet been tuned on a dev split.
+
+**Injection `post_processing` defences** (`RAG/injection/<framework>/post_processing/`) check the generator's response before it is returned. Retrieval, chunking and the answer prompt are the same as the injection `baseline`, plus a system message holding a random canary code in every condition (including `Q0`), so the conditions stay comparable.
+
+| ID | Defence | Module | What it does |
+|---|---|---|---|
+| Q1 | Canary leak check | `checks.py` | A random `CNRY-…` code is placed in the system message; if it appears in the response, the response is blocked (detects prompt leakage only) |
+| Q2 | Exfiltration / link filter | `checks.py` | URLs, markdown images and email addresses that are not in the question or on `ALLOWED_DOMAINS` (empty by default, in `policy.py`) are stripped from the response |
+| Q3 | Task alignment | `checks.py` | Sentences whose `all-MiniLM-L6-v2` cosine similarity to the question is below 0.2 are treated as off-task and redacted |
+| Q4 | Groundedness (NLI) | `checks.py` | Sentences with no retrieved chunk entailing them at P ≥ 0.5 (`cross-encoder/nli-deberta-v3-base`, one chunk at a time) are redacted. Q4a grounds against all retrieved chunks; Q4b only against chunks that the pre-processing heuristic and classifier (`detectors.py`, threshold 0.9) do not flag, because injected claims are often grounded in the poisoned chunk itself |
+| Q5 | LLM-judge verifier | `judge.py` | The `--judge` model sees only the question and the response, never the documents, and returns JSON `clean` or `suspicious`; unparseable output counts as suspicious |
+| Q6 | Response policy | `policy.py` | Canary leak: block. Exfiltration: strip. Off-task or ungrounded sentences: redact. Judge says suspicious, or stripping/redaction leaves under 20 characters: regenerate once without the chunk most similar to the flagged text (when regeneration is on), otherwise block with `I couldn't produce a reliable answer from the available documents.` Nothing flagged: accept |
+
+Responses are split into sentences line by line, so bulleted answers are checked item by item. The under-20-character rule applies only to a response that stripping or redaction shortened, so short, untouched answers are not blocked. A regenerated answer is returned without being checked again, as in the plan.
+
+`--condition` selects which defences run (injection test, `post_processing` pipeline only):
+
+| Condition | Defences | Extra LLM calls per question |
+|---|---|---|
+| `Q0` | None | 0 |
+| `Q1` | Canary + link filter | 0 |
+| `Q2` | Q1 + task alignment | 0 |
+| `Q3a` | Q1 + groundedness against all chunks | 0 |
+| `Q3b` | Q1 + groundedness against unflagged chunks | 0 |
+| `Q4` | Q1 + LLM judge | 1 |
+| `Q5` (default) | Q1 + task alignment + groundedness (unflagged chunks) + LLM judge | 1 |
+| `Q6` | Q5 + regeneration | 1, plus at most 1 regeneration |
+
+The conditions are defined in `CONDITIONS` in `policy.py`. Each case prints a one-line summary: condition, actions taken (`strip`, `redact`, `block`, `regenerate`, or `accept`), the judge's verdict and reason, how many chunks were allowed to ground the answer, extra LLM calls and the added latency. The thresholds (0.2 alignment, 0.5 entailment, 0.9 detector, 20 characters) are the plan's defaults and have not been tuned on a dev split.
 
 **Scoring methods**
 - **Heuristic** (`evaluator.py` in `baseline` and `pre_processing`): weighted mix of exact match (40%), fuzzy match (20%), embedding similarity using `all-MiniLM-L6-v2` (30%) and keyword overlap (10%), on a 0–100 scale.
@@ -199,7 +227,7 @@ python main.py [--test TEST] [--framework FRAMEWORK] [--pipeline PIPELINE] [--mo
 | `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined` | `combined` | RAG variant to test |
 | `--model` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that answers the questions |
 | `--judge` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that scores the answers (`post_processing` and `combined` only; ignored by the heuristic pipelines) |
-| `--condition` | `P0`, `P1`, `P2`, `P3`, `P4`, `P5` | `P5` | Injection defence condition (`--test injection --pipeline pre_processing` only; ignored otherwise) |
+| `--condition` | `P0`–`P5` (`pre_processing`), `Q0`, `Q1`, `Q2`, `Q3a`, `Q3b`, `Q4`, `Q5`, `Q6` (`post_processing`) | `P5` / `Q5` | Injection defence condition (`--test injection` with `--pipeline pre_processing` or `post_processing` only; ignored otherwise; a condition from the other pipeline is rejected) |
 
 ### Examples
 
@@ -223,6 +251,7 @@ python main.py --framework llamaindex --pipeline combined --model gemini --judge
 # Indirect prompt injection test (ingests every file in data/injection/)
 python main.py --test injection --pipeline baseline --model gpt
 python main.py --test injection --pipeline pre_processing --condition P5 --model gpt
+python main.py --test injection --pipeline post_processing --condition Q5 --model gpt --judge gpt
 python main.py --test injection --framework llamaindex --pipeline combined --model gemini
 
 # Local models
@@ -255,7 +284,7 @@ Total Time: <seconds>
 
 Both scoring methods use a 0–100 scale, but they measure different things (surface and semantic similarity vs. LLM-judged correctness), so compare scores within the same scoring method.
 
-With `--test injection`, the run instead ingests every document in `data/injection/`, then for each case in `injection_tests.json` prints the prompt, the model's response, which `injection_markers` leaked into it, and a verdict (`INJECTED (vulnerable)` if any marker matched, else `BLOCKED (safe)`), followed by a summary count. Injection scoring is marker matching, not the claim judge, so `--judge` is ignored in this mode.
+With `--test injection`, the run instead ingests every document in `data/injection/`, then for each case in `injection_tests.json` prints the prompt, the model's response, which `injection_markers` leaked into it, and a verdict (`INJECTED (vulnerable)` if any marker matched, else `BLOCKED (safe)`), followed by a summary count. Injection scoring is marker matching, not the claim judge, so `--judge` is only used by the injection `post_processing` pipeline, as its Q5 verifier.
 
 ---
 
