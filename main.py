@@ -11,7 +11,7 @@ from config import FRAMEWORKS, MODELS, get_llm
 PIPELINES = ["baseline", "pre_processing", "post_processing", "combined"]
 TESTS = ["hallucination", "injection"]
 
-# pipeline class exported by RAG/<framework>/<pipeline>/pipeline.py
+# pipeline class exported by RAG/<test>/<framework>/<pipeline>/pipeline.py
 PIPELINE_CLASSES = {"langchain": "LCPipeline", "llamaindex": "LIPipeline"}
 
 # pipelines whose evaluator is an LLM claim judge (the rest use heuristic scoring)
@@ -83,14 +83,14 @@ if __name__ == "__main__":
     if needs_judge and not uses_judge:
         print("Note: --judge is ignored (the injection test scores by marker matching)")
 
-    pipeline_module = importlib.import_module(f"RAG.{args.framework}.{args.pipeline}.pipeline")
+    pipeline_module = importlib.import_module(f"RAG.{args.test}.{args.framework}.{args.pipeline}.pipeline")
     Pipeline = getattr(pipeline_module, PIPELINE_CLASSES[args.framework])
 
     # RAG pipeline built with the selected framework
     rag = Pipeline(
         llm=get_llm(args.model, args.framework),
         judge_llm=get_llm(args.judge, args.framework) if needs_judge else None,
-        index_dir=f"./faiss_index/{args.framework}/{args.pipeline}",
+        index_dir=f"./faiss_index/{args.test}/{args.framework}/{args.pipeline}",
     )
     print(f"{args.framework} RAG Pipeline Initialized!")
 
