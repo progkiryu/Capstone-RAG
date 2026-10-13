@@ -14,7 +14,7 @@ Each variant lives in its own folder under `RAG/<test>/<framework>/` and is sele
 |---|---|---|---|
 | `baseline` | None: PDF split into 1000-char chunks (200 overlap), top-16 FAISS similarity search | None | Heuristic |
 | `pre_processing` | Nine hallucination measures, listed below (implemented under `RAG/hallucination/` only) | None | Heuristic |
-| `post_processing` | None (same retrieval as `baseline`) | Answer split into sentence-level claims (NLTK); each claim judged 0–100 by an LLM; scores averaged | LLM judge |
+| `post_processing` | None (same retrieval and generation as `baseline`) | Eight hallucination measures, listed below (implemented under `RAG/hallucination/` only) | LLM judge |
 | `combined` | Same as `pre_processing` | Same as `post_processing` | LLM judge |
 
 All variants embed chunks with OpenAI `text-embedding-3-small` and store them in a FAISS `IndexFlatL2` index.
@@ -35,9 +35,24 @@ All variants embed chunks with OpenAI `text-embedding-3-small` and store them in
 
 Measures 6 and 7 add two LLM calls per question (three when the grade is `AMBIGUOUS`); measures 1–5, 8 and 9 run without LLM calls. Each question prints a one-line summary: chunks retrieved, after NLI and after compression, the grade, whether the rewrite was used, LLM calls added and the added latency.
 
+**`post_processing` measures**, applied to each draft answer in this order: decompose (1) → ground claims (2, 3) → sample-based checks (4, 5) → gate or revise (6, 7) → annotate provenance (8). The defences see only the question, the draft and the retrieved context, never the ground-truth answer; `query()` returns the final answer and `evaluate()` scores it against the ground truth afterwards. A draft that is already `Not found in context` is returned unchanged with no checks.
+
+| # | Measure | Module | What it does |
+|---|---|---|---|
+| 1 | Claim decomposition | `verifier.py` | Draft split into sentence-level claims with NLTK's Punkt tokenizer; a sentence shorter than 3 tokens is merged into the previous claim |
+| 2 | NLI groundedness | `verifier.py` | `cross-encoder/nli-deberta-v3-base` (fallback `cross-encoder/qnli-electra-base`) gives P(entailment) for each claim against each retrieved chunk, as the claim alone and prefixed with the question (drafts are often bare fragments such as `1962`); a claim's NLI support is its best score. Chunks are scored one at a time because the cross-encoder reads only 512 tokens |
+| 3 | LLM faithfulness judge | `judge.py` | One `--judge` call per answer: numbered claims plus the context, answered as a JSON array of `yes` / `partial` / `no` (1, 0.5, 0) on whether the context supports each claim. Claim support is the mean of the NLI and judge scores; if the reply does not parse, NLI support is used alone |
+| 4 | Self-consistency | `consistency.py` | 5 extra answers sampled at temperature 1.0 (the only value gpt-5 models accept) with the same prompt and context; consistency is the mean pairwise `all-MiniLM-L6-v2` cosine similarity over the draft and the samples |
+| 5 | Semantic entropy | `consistency.py` | The same 6 answers clustered by bidirectional entailment (P ≥ 0.5 both ways, each read with the question); entropy over cluster sizes, from 0 to ln 6 ≈ 1.79 |
+| 6 | Abstention gate | `pipeline.py` | Answer replaced with `Not found in context` if mean claim support < 0.5, entropy > 1.10 (ln 3, an even three-way split of meanings) or no claim passes |
+| 7 | Claim revision | `verifier.py` | Otherwise claims with support < 0.5 are removed; the answer is rebuilt from slices of the draft, so it never contains new text |
+| 8 | Provenance | `verifier.py` | Each surviving claim is linked to its best-entailing chunk; coverage is the percentage of surviving claims whose source chunk has NLI ≥ 0.5. Returned in `evaluate()`'s `verification` dict, not added to the answer |
+
+Thresholds were fixed from the support and entropy distributions of the 25 questions, without consulting the ground-truth answers. Each question adds 6 LLM calls (1 judge, 5 samples) and prints a one-line summary: claims, claims dropped, aggregate support, consistency, entropy, whether it abstained and why, provenance coverage, LLM calls added and the added latency.
+
 **Scoring methods**
 - **Heuristic** (`evaluator.py` in `baseline` and `pre_processing`): weighted mix of exact match (40%), fuzzy match (20%), embedding similarity using `all-MiniLM-L6-v2` (30%) and keyword overlap (10%), on a 0–100 scale.
-- **LLM judge** (`evaluator.py` in `post_processing` and `combined`): the judge model compares each claim against the ground-truth answer and returns 0–100; the claim scores are averaged.
+- **LLM judge** (`evaluator.py` in `post_processing` and `combined`): the final answer is split into sentences (NLTK), the judge model compares each against the ground-truth answer and returns 0–100, and the scores are averaged. This is separate from the `post_processing` faithfulness judge (measure 3), which never sees the ground truth.
 
 ---
 
@@ -60,7 +75,9 @@ Differences that remain by design, because each framework uses its own component
 - **BM25 tokenisation**: LangChain splits on whitespace and matches case-sensitively (against a lower-cased query); LlamaIndex lower-cases, stems and removes stopwords.
 - **Embedding input**: LlamaIndex's OpenAI embeddings replace newlines with spaces before embedding; LangChain sends the text unchanged.
 - **MMR**: `FaissVectorStore` has no MMR mode, so LlamaIndex fetches the 48 nearest chunks and re-ranks them with `get_top_k_mmr_embeddings`. LlamaIndex penalises similarity to the most recently selected chunk, LangChain to all selected chunks; with `fetch_k` (48) above `k` (16) the two can select different chunks.
-- **Retrieved sets in `pre_processing`**: because of the BM25, MMR and chunk-boundary differences above, the two frameworks retrieve 16 chunks per question but share only about 55% of them at page level, so chunk counts after the NLI filter can differ by several chunks. On the same chunks the NLI filter agrees to within 2 of 42.- **Chunk boundaries**: the splitters use different rules for where to break text, so chunks of the same size can start and end in different places.
+- **Retrieved sets in `pre_processing`**: because of the BM25, MMR and chunk-boundary differences above, the two frameworks retrieve 16 chunks per question but share only about 55% of them at page level, so chunk counts after the NLI filter can differ by several chunks. On the same chunks the NLI filter agrees to within 2 of 42.
+- **Sampling in `post_processing`**: LangChain sets the sampling temperature with `.bind(temperature=...)` (HuggingFace models: `pipeline_kwargs` with `do_sample=True`). LlamaIndex passes it to `llm.chat()` (`generation_config` for Gemini); `HuggingFaceLLM` ignores per-call arguments, so it samples from a copy of the model whose `generate_kwargs` enable sampling. The prompts, temperature and sample count are the same.
+- **Chunk boundaries**: the splitters use different rules for where to break text, so chunks of the same size can start and end in different places.
 
 ---
 
@@ -220,4 +237,5 @@ With `--test injection`, the run instead ingests every document in `data/injecti
 - Heuristic and LLM-judge scores are not directly comparable across pipelines.
 - Retrieval differs slightly between frameworks for the reasons listed under [Frameworks](#frameworks).
 - `deepseek` (DeepSeek-R1) includes `<think>` reasoning text in its answers, which affects scoring.
+- In `post_processing`, long multi-sentence answers rarely entail each other in both directions, so they get higher semantic entropy than short ones and are more likely to trip the entropy gate. NLI support is also weak on the business directory, whose PDF text extracts one word per line, so its claims rely on the LLM judge.
 - Injection scoring uses case-insensitive substring matching on `injection_markers`; it flags whether attack content reached the answer, not whether the model acted on it in a genuinely harmful way.
