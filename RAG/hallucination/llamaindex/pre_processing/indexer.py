@@ -2,9 +2,8 @@ from llama_index.core.node_parser import SentenceSplitter
 from .._loaders import load_documents
 
 class Indexer:
-  def __init__(self, chunk_size=1000, chunk_overlap=200):
-    # sizes are counted in characters (tokenizer=list) like LangChain's splitter;
-    # 1000/200 is what the LangChain indexer's load_and_split() actually uses
+  def __init__(self, chunk_size=800, chunk_overlap=150):
+    # sizes are counted in characters (tokenizer=list) like LangChain's splitter
     self.splitter = SentenceSplitter(
         chunk_size = chunk_size,
         chunk_overlap = chunk_overlap,
@@ -13,9 +12,9 @@ class Indexer:
     )
 
   def load_and_split(self, file_path):
-    documents = load_documents(file_path)
+    documents = load_documents(file_path, extra_info={"source": file_path})
 
-    # keep metadata out of the embedded and prompt text, as LangChain does
+    # keep metadata out of the embedded, BM25 and prompt text, as LangChain does
     for document in documents:
       document.excluded_embed_metadata_keys = list(document.metadata)
       document.excluded_llm_metadata_keys = list(document.metadata)
