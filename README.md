@@ -15,7 +15,7 @@ Each variant lives in its own folder under `RAG/<test>/<framework>/` and is sele
 | `baseline` | None: PDF split into 1000-char chunks (200 overlap), top-16 FAISS similarity search | None | Heuristic |
 | `pre_processing` | Nine hallucination measures, listed below (implemented under `RAG/hallucination/` only) | None | Heuristic |
 | `post_processing` | None (same retrieval and generation as `baseline`) | Eight hallucination measures, listed below (implemented under `RAG/hallucination/` only) | LLM judge |
-| `combined` | Same as `pre_processing` | Same as `post_processing` | LLM judge |
+| `combined` | The nine `pre_processing` measures | The eight `post_processing` measures, checked against the compressed context | LLM judge |
 
 All variants embed chunks with OpenAI `text-embedding-3-small` and store them in a FAISS `IndexFlatL2` index.
 
@@ -49,6 +49,8 @@ Measures 6 and 7 add two LLM calls per question (three when the grade is `AMBIGU
 | 8 | Provenance | `verifier.py` | Each surviving claim is linked to its best-entailing chunk; coverage is the percentage of surviving claims whose source chunk has NLI ≥ 0.5. Returned in `evaluate()`'s `verification` dict, not added to the answer |
 
 Thresholds were fixed from the support and entropy distributions of the 25 questions, without consulting the ground-truth answers. Each question adds 6 LLM calls (1 judge, 5 samples) and prints a one-line summary: claims, claims dropped, aggregate support, consistency, entropy, whether it abstained and why, provenance coverage, LLM calls added and the added latency.
+
+**`combined`** runs both sets unchanged: rewrite → normalise → hybrid retrieve → re-rank → grade → NLI filter → compress → generate draft → decompose → ground claims → sample-based checks → gate or revise → provenance. The post-processing checks (NLI support, faithfulness judge, the 5 samples and provenance) use the compressed context the generator saw. A draft of `Not found in context`, including the `INCORRECT` grade path, skips the post-processing checks. Each question adds 8 LLM calls (rewrite, grade, judge, 5 samples), 9 when the grade is `AMBIGUOUS`, or 2–3 when the draft abstains, and prints both the `Pre-processing:` and `Post-processing:` summary lines. The NLI cross-encoder and `all-MiniLM-L6-v2` are loaded once and shared by the measures that use them.
 
 **Scoring methods**
 - **Heuristic** (`evaluator.py` in `baseline` and `pre_processing`): weighted mix of exact match (40%), fuzzy match (20%), embedding similarity using `all-MiniLM-L6-v2` (30%) and keyword overlap (10%), on a 0–100 scale.
