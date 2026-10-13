@@ -4,6 +4,7 @@ from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
 from .judge import Judge
+from .consistency import Consistency, consistency_score, semantic_entropy
 from .verifier import (
     CLAIM_SUPPORT_THRESHOLD, answer_text, provenance, revise, split_claims, support_matrix
 )
@@ -18,6 +19,7 @@ class LIPipeline:
         self.generator = Generator(llm)
         self.evaluator = Evaluator(judge_llm)
         self.judge = Judge(judge_llm)
+        self.consistency = Consistency(llm, self.generator.prompt)
         self.retriever = None
         # accumulate nodes so multiple ingest() calls index every file, not just the last
         self.nodes = None
@@ -58,6 +60,10 @@ class LIPipeline:
         else:
             support = [(nli + judged) / 2 for nli, judged in zip(nli_support, judge_support)]
         keep = [score >= CLAIM_SUPPORT_THRESHOLD for score in support]
+
+        # sampled once and shared by the consistency score and the semantic entropy
+        answers = [draft] + self.consistency.sample(question, chunks)
+        entropy, clusters = semantic_entropy(question, answers)
         records, coverage = provenance(claims, matrix, keep)
 
         # every claim failing is left to the abstention gate
@@ -66,7 +72,8 @@ class LIPipeline:
         report.update(
             nli_support=nli_support, judge_support=judge_support, support=support,
             aggregate_support=sum(support) / len(support), kept=keep, dropped=keep.count(False),
-            provenance=records, coverage=coverage,
+            provenance=records, coverage=coverage, samples=answers[1:],
+            consistency=consistency_score(answers), entropy=entropy, clusters=clusters,
         )
         return report
 
