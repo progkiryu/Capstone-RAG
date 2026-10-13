@@ -1,5 +1,6 @@
 data/hallucination/**
 data/injection/**
+docs
 
 .env
 
