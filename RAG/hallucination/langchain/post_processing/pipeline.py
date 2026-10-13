@@ -3,6 +3,7 @@ from .datastore import Datastore
 from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
+from .verifier import answer_text, split_claims, support_matrix
 
 class LCPipeline:
     def __init__(self, llm, judge_llm, index_dir="./faiss_index"):
@@ -29,8 +30,15 @@ class LCPipeline:
 
     def query(self, question):
         docs = self.retriever.retrieve(question)
-        response = self.generator.query(question, docs)
-        return response.text, docs
+        draft = answer_text(self.generator.query(question, docs))
+        self.last_report = self.verify(question, draft, [doc.page_content for doc in docs])
+        return self.last_report["answer"], docs
+
+    # sees only the question, the draft and the retrieved context, never the reference
+    def verify(self, question, draft, chunks):
+        claims = [draft[start:end] for start, end in split_claims(draft)]
+        nli = support_matrix(question, claims, chunks).max(axis=1) if claims else []
+        return {"answer": draft, "draft": draft, "claims": claims, "nli_support": [float(score) for score in nli]}
 
     def evaluate(self, question, reference):
         answer, _ = self.query(question)
