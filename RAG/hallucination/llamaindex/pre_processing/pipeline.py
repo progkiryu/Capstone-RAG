@@ -3,6 +3,8 @@ from .datastore import Datastore
 from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
+from .filter import NLIFilter
+from .compressor import Compressor
 
 class LIPipeline:
     def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
@@ -11,6 +13,8 @@ class LIPipeline:
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
         self.evaluator = Evaluator()
+        self.nli_filter = NLIFilter()
+        self.compressor = Compressor()
         self.retriever = None
         # accumulate nodes so multiple ingest() calls index every file; BM25 also needs them
         self.nodes = None
@@ -32,6 +36,8 @@ class LIPipeline:
 
     def query(self, question):
         nodes = self.retriever.retrieve(question)
+        nodes = self.nli_filter.filter(question, nodes)
+        nodes = self.compressor.compress(question, nodes)
         response = self.generator.query(question, nodes)
         return response, nodes
 

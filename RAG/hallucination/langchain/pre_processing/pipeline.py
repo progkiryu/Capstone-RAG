@@ -3,6 +3,8 @@ from .datastore import Datastore
 from .generator import Generator
 from .evaluator import Evaluator
 from .retriever import Retriever
+from .filter import NLIFilter
+from .compressor import Compressor
 
 class LCPipeline:
     def __init__(self, llm, judge_llm=None, index_dir="./faiss_index"):
@@ -11,6 +13,8 @@ class LCPipeline:
         self.datastore = Datastore(persist_dir=index_dir)
         self.generator = Generator(llm)
         self.evaluator = Evaluator()
+        self.nli_filter = NLIFilter()
+        self.compressor = Compressor()
         self.retriever = None
         # accumulate docs so multiple ingest() calls index every file; BM25 also needs them
         self.docs = None
@@ -32,6 +36,8 @@ class LCPipeline:
 
     def query(self, question):
         docs = self.retriever.retrieve(question)
+        docs = self.nli_filter.filter(question, docs)
+        docs = self.compressor.compress(question, docs)
         response = self.generator.query(question, docs)
         return response, docs
 
