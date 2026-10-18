@@ -8,14 +8,16 @@ import gc
 
 from config import FRAMEWORKS, MODELS, get_llm
 
-PIPELINES = ["baseline", "pre_processing", "post_processing", "combined"]
+PIPELINES = ["baseline", "pre_processing", "post_processing", "combined", "unified"]
+# the unified pipeline (hallucination + injection defences) lives in RAG/combined/<framework>/
+UNIFIED_FRAMEWORKS = ["langchain"]
 TESTS = ["hallucination", "injection"]
 
 # pipeline class exported by RAG/<test>/<framework>/<pipeline>/pipeline.py
 PIPELINE_CLASSES = {"langchain": "LCPipeline", "llamaindex": "LIPipeline"}
 
 # pipelines whose evaluator is an LLM claim judge (the rest use heuristic scoring)
-LLM_JUDGE_PIPELINES = {"post_processing", "combined"}
+LLM_JUDGE_PIPELINES = {"post_processing", "combined", "unified"}
 
 # injection defence conditions per pipeline: pre_processing P0 none ... P5 full stack;
 # post_processing Q0 none ... Q5 full stack, Q6 full stack + regeneration
@@ -38,7 +40,8 @@ def parse_args():
     parser.add_argument("--framework", choices=FRAMEWORKS, default="langchain",
                         help="RAG framework the pipeline is built with")
     parser.add_argument("--pipeline", choices=PIPELINES, default="combined",
-                        help="RAG pipeline under RAG/<framework>/ to test")
+                        help="RAG pipeline under RAG/<test>/<framework>/ to test; unified (hallucination + "
+                             "injection defences) is under RAG/combined/<framework>/, langchain only")
     parser.add_argument("--model", choices=MODELS, default="gpt",
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
@@ -50,6 +53,8 @@ def parse_args():
                              "Q3a/Q3b +groundedness (all/unflagged chunks), Q4 +LLM judge, "
                              "Q5 full stack (default), Q6 full stack + regeneration")
     args = parser.parse_args()
+    if args.pipeline == "unified" and args.framework not in UNIFIED_FRAMEWORKS:
+        parser.error(f"--pipeline unified is only built for {', '.join(UNIFIED_FRAMEWORKS)}")
     if args.test == "injection" and args.pipeline in CONDITIONS:
         if args.condition is None:
             args.condition = DEFAULT_CONDITIONS[args.pipeline]
@@ -99,7 +104,9 @@ if __name__ == "__main__":
     # since injection scores by marker matching rather than the claim judge.
     # injection post_processing uses the judge LLM as its injection verifier (Q4-Q6)
     needs_judge = args.pipeline in LLM_JUDGE_PIPELINES
-    uses_judge = needs_judge and (args.test == "hallucination" or args.pipeline == "post_processing")
+    uses_judge = needs_judge and (
+        args.test == "hallucination" or args.pipeline in ("post_processing", "unified")
+    )
     print(f"Test: {args.test} | Framework: {args.framework} | Pipeline: {args.pipeline} | "
           f"Model: {args.model} | Judge: {args.judge if uses_judge else 'n/a'}")
     if needs_judge and not uses_judge:
@@ -108,7 +115,11 @@ if __name__ == "__main__":
     if uses_condition:
         print(f"Defence condition: {args.condition}")
 
-    pipeline_module = importlib.import_module(f"RAG.{args.test}.{args.framework}.{args.pipeline}.pipeline")
+    if args.pipeline == "unified":
+        module_path = f"RAG.combined.{args.framework}.pipeline"
+    else:
+        module_path = f"RAG.{args.test}.{args.framework}.{args.pipeline}.pipeline"
+    pipeline_module = importlib.import_module(module_path)
     Pipeline = getattr(pipeline_module, PIPELINE_CLASSES[args.framework])
 
     # RAG pipeline built with the selected framework
