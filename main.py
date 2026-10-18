@@ -10,7 +10,7 @@ from config import FRAMEWORKS, MODELS, get_llm
 
 PIPELINES = ["baseline", "pre_processing", "post_processing", "combined", "unified"]
 # the unified pipeline (hallucination + injection defences) lives in RAG/combined/<framework>/
-UNIFIED_FRAMEWORKS = ["langchain"]
+UNIFIED_FRAMEWORKS = ["langchain", "llamaindex"]
 TESTS = ["hallucination", "injection"]
 
 # pipeline class exported by RAG/<test>/<framework>/<pipeline>/pipeline.py
@@ -41,7 +41,7 @@ def parse_args():
                         help="RAG framework the pipeline is built with")
     parser.add_argument("--pipeline", choices=PIPELINES, default="combined",
                         help="RAG pipeline under RAG/<test>/<framework>/ to test; unified (hallucination + "
-                             "injection defences) is under RAG/combined/<framework>/, langchain only")
+                             "injection defences) is under RAG/combined/<framework>/")
     parser.add_argument("--model", choices=MODELS, default="gpt",
                         help="LLM used to generate answers")
     parser.add_argument("--judge", choices=MODELS, default="gpt",
