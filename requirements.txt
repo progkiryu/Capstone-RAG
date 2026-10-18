@@ -22,7 +22,7 @@ llama-index-readers-file==0.7.0
 llama-index-retrievers-bm25==0.8.0
 llama-index-vector-stores-faiss==0.7.0
 
-# local HuggingFace models (qwen, deepseek)
+# local HuggingFace models (qwen, llama)
 torch==2.10.0
 # must match torch 2.10 (transformers imports torchvision if installed; a mismatch breaks it)
 torchvision==0.25.0

@@ -10,7 +10,7 @@ MODELS = {
     "gpt": ("openai", "gpt-5-mini"),
     "gemini": ("google", "gemini-2.5-flash"),
     "qwen": ("hf", "Qwen/Qwen2.5-1.5B-Instruct"),
-    "deepseek": ("hf", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"),
+    "llama": ("hf", "meta-llama/Llama-3.2-1B-Instruct"),
 }
 
 # RAG frameworks under RAG/ that the models can be built for

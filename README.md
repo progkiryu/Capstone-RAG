@@ -163,7 +163,7 @@ Selected with `--model` (the answering model) and `--judge` (the scoring model).
 | `gpt` | `gpt-5-mini` | OpenAI API |
 | `gemini` | `gemini-2.5-flash` | Google Gemini API |
 | `qwen` | `Qwen/Qwen2.5-1.5B-Instruct` | Locally via HuggingFace Transformers |
-| `deepseek` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | Locally via HuggingFace Transformers |
+| `llama` | `meta-llama/Llama-3.2-1B-Instruct` | Locally via HuggingFace Transformers (gated: needs `HF_TOKEN`, see Setup) |
 
 Local models are downloaded from HuggingFace the first time they are selected.
 
@@ -220,9 +220,10 @@ Every pipeline folder contains the same six modules. The differences between var
    ```
    OPENAI_API_KEY=your-openai-key
    GEMINI_API_KEY=your-gemini-key
+   HF_TOKEN=your-huggingface-token
    ```
 
-   `OPENAI_API_KEY` is always required, because every pipeline uses OpenAI embeddings. `GEMINI_API_KEY` is only needed when `gemini` is used as `--model` or `--judge`.
+   `OPENAI_API_KEY` is always required, because every pipeline uses OpenAI embeddings. `GEMINI_API_KEY` is only needed when `gemini` is used as `--model` or `--judge`. `HF_TOKEN` is only needed for `llama`: Llama 3.2 is gated, so first request access at https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct, then create a read token in your HuggingFace settings.
 
 3. **Add the test data.** `data/` is gitignored.
 
@@ -235,7 +236,7 @@ Every pipeline folder contains the same six modules. The differences between var
 
    For the injection test (`--test injection`), `data/injection/` holds the attack documents plus `injection_tests.json` (the manifest of test cases and their success markers). Every non-`.json` file in the folder is ingested; the manifest drives the cases. Supported document formats: `.pdf`, `.txt`, `.html`, `.md`.
 
-4. **(Optional) GPU for local models.** The default `torch` from pip is CPU-only on Windows. To run `qwen` or `deepseek` on an NVIDIA GPU, install the CUDA build using the command from [pytorch.org](https://pytorch.org/get-started/locally/).
+4. **(Optional) GPU for local models.** The default `torch` from pip is CPU-only on Windows. To run `qwen` or `llama` on an NVIDIA GPU, install the CUDA build using the command from [pytorch.org](https://pytorch.org/get-started/locally/).
 
 ---
 
@@ -250,8 +251,8 @@ python main.py [--test TEST] [--framework FRAMEWORK] [--pipeline PIPELINE] [--mo
 | `--test` | `hallucination`, `injection` | `hallucination` | Test set to run: hallucination (Q/A over `data/hallucination/`) or indirect prompt injection (ingests every file in `data/injection/`, scores by marker matching) |
 | `--framework` | `langchain`, `llamaindex` | `langchain` | RAG framework the pipeline is built with |
 | `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined`, `unified` | `combined` | RAG variant to test (`unified`: hallucination + injection defences) |
-| `--model` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that answers the questions |
-| `--judge` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that scores the answers (`post_processing` and `combined` only; ignored by the heuristic pipelines) |
+| `--model` | `gpt`, `gemini`, `qwen`, `llama` | `gpt` | LLM that answers the questions |
+| `--judge` | `gpt`, `gemini`, `qwen`, `llama` | `gpt` | LLM that scores the answers (`post_processing` and `combined` only; ignored by the heuristic pipelines) |
 | `--condition` | `P0`–`P5` (`pre_processing`), `Q0`, `Q1`, `Q2`, `Q3a`, `Q3b`, `Q4`, `Q5`, `Q6` (`post_processing`) | `P5` / `Q5` | Injection defence condition (`--test injection` with `--pipeline pre_processing` or `post_processing` only; ignored otherwise; a condition from the other pipeline is rejected) |
 
 ### Examples
@@ -286,12 +287,12 @@ python main.py --test injection --framework llamaindex --pipeline combined --mod
 
 # Local models
 python main.py --pipeline baseline --model qwen
-python main.py --framework llamaindex --pipeline combined --model deepseek --judge gpt
+python main.py --framework llamaindex --pipeline combined --model llama --judge gpt
 
 # Run every framework, pipeline and model, saving each run's output
 foreach ($f in 'langchain','llamaindex') {
     foreach ($p in 'baseline','pre_processing','post_processing','combined') {
-        foreach ($m in 'gpt','gemini','qwen','deepseek') {
+        foreach ($m in 'gpt','gemini','qwen','llama') {
             python main.py --framework $f --pipeline $p --model $m --judge gpt | Tee-Object "results_${f}_${p}_${m}.txt"
         }
     }
@@ -322,6 +323,5 @@ With `--test injection`, the run instead ingests every document in `data/injecti
 
 - Heuristic and LLM-judge scores are not directly comparable across pipelines.
 - Retrieval differs slightly between frameworks for the reasons listed under [Frameworks](#frameworks).
-- `deepseek` (DeepSeek-R1) includes `<think>` reasoning text in its answers, which affects scoring.
 - In `post_processing`, long multi-sentence answers rarely entail each other in both directions, so they get higher semantic entropy than short ones and are more likely to trip the entropy gate. NLI support is also weak on the business directory, whose PDF text extracts one word per line, so its claims rely on the LLM judge.
 - Injection scoring uses case-insensitive substring matching on `injection_markers`; it flags whether attack content reached the answer, not whether the model acted on it in a genuinely harmful way.
