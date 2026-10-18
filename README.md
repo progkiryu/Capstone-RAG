@@ -16,7 +16,7 @@ Each variant lives in its own folder under `RAG/<test>/<framework>/` and is sele
 | `pre_processing` | Hallucination test: nine hallucination measures. Injection test: injection defences D1–D5. Both listed below | None | Heuristic (hallucination), marker matching (injection) |
 | `post_processing` | None (same retrieval and generation as `baseline`) | Hallucination test: eight hallucination measures. Injection test: injection defences Q1–Q6. Both listed below | LLM judge (hallucination), marker matching (injection) |
 | `combined` | The nine `pre_processing` measures | The eight `post_processing` measures, checked against the compressed context | LLM judge |
-| `unified` | Hallucination measures plus injection defences D1–D5 (`RAG/combined/langchain/`, LangChain only) | Hallucination measures plus injection defences Q1–Q5 | LLM judge (hallucination), marker matching (injection) |
+| `unified` | Hallucination measures plus injection defences D1–D5 (`RAG/combined/<framework>/`) | Hallucination measures plus injection defences Q1–Q5 | LLM judge (hallucination), marker matching (injection) |
 
 All variants embed chunks with OpenAI `text-embedding-3-small` and store them in a FAISS `IndexFlatL2` index.
 
@@ -104,7 +104,7 @@ Responses are split into sentences line by line, so bulleted answers are checked
 
 The conditions are defined in `CONDITIONS` in `policy.py`. Each case prints a one-line summary: condition, actions taken (`strip`, `redact`, `block`, `regenerate`, or `accept`), the judge's verdict and reason, how many chunks were allowed to ground the answer, extra LLM calls and the added latency. The thresholds (0.2 alignment, 0.5 entailment, 0.9 detector, 20 characters) are the plan's defaults and have not been tuned on a dev split.
 
-**`unified`** (`RAG/combined/langchain/`) puts the hallucination `combined` measures and the injection full stacks (pre-processing `P5`, post-processing `Q5`) into one pipeline that runs on either test set. Per question:
+**`unified`** (`RAG/combined/langchain/` with `LCPipeline`, `RAG/combined/llamaindex/` with `LIPipeline`) puts the hallucination `combined` measures and the injection full stacks (pre-processing `P5`, post-processing `Q5`) into one pipeline that runs on either test set. Per question:
 
 1. Rewrite the query, normalise it and retrieve (hybrid retrieval and re-ranking).
 2. Injection screen (D1–D4): sanitise each chunk, flag it with the heuristic and classifier detectors, and drop flagged chunks. This runs before the grader, because the grader is an LLM that reads the chunks.
@@ -194,7 +194,7 @@ Capstone-RAG/
 │   ├── injection/            # pipelines for the injection test: same layout
 │   └── combined/             # unified pipeline (--pipeline unified), hallucination + injection defences
 │       ├── langchain/        # LCPipeline
-│       └── llamaindex/       # not built yet (empty)
+│       └── llamaindex/       # LIPipeline
 ├── data/                     # test data (gitignored, add locally)
 │   ├── hallucination/        # Swan Lagoon PDFs + swan_lagoon.json (25 question/answer pairs)
 │   └── injection/            # indirect prompt injection test data
@@ -249,7 +249,7 @@ python main.py [--test TEST] [--framework FRAMEWORK] [--pipeline PIPELINE] [--mo
 |---|---|---|---|
 | `--test` | `hallucination`, `injection` | `hallucination` | Test set to run: hallucination (Q/A over `data/hallucination/`) or indirect prompt injection (ingests every file in `data/injection/`, scores by marker matching) |
 | `--framework` | `langchain`, `llamaindex` | `langchain` | RAG framework the pipeline is built with |
-| `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined`, `unified` | `combined` | RAG variant to test (`unified`: hallucination + injection defences, `--framework langchain` only) |
+| `--pipeline` | `baseline`, `pre_processing`, `post_processing`, `combined`, `unified` | `combined` | RAG variant to test (`unified`: hallucination + injection defences) |
 | `--model` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that answers the questions |
 | `--judge` | `gpt`, `gemini`, `qwen`, `deepseek` | `gpt` | LLM that scores the answers (`post_processing` and `combined` only; ignored by the heuristic pipelines) |
 | `--condition` | `P0`–`P5` (`pre_processing`), `Q0`, `Q1`, `Q2`, `Q3a`, `Q3b`, `Q4`, `Q5`, `Q6` (`post_processing`) | `P5` / `Q5` | Injection defence condition (`--test injection` with `--pipeline pre_processing` or `post_processing` only; ignored otherwise; a condition from the other pipeline is rejected) |
@@ -281,6 +281,7 @@ python main.py --test injection --pipeline post_processing --condition Q5 --mode
 # Unified pipeline (hallucination + injection defences), on either test set
 python main.py --test hallucination --pipeline unified --model gpt --judge gpt
 python main.py --test injection --pipeline unified --model gpt --judge gpt
+python main.py --test hallucination --framework llamaindex --pipeline unified --model gpt --judge gpt
 python main.py --test injection --framework llamaindex --pipeline combined --model gemini
 
 # Local models
