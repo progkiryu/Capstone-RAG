@@ -31,11 +31,6 @@ Search query:
 """
 
 
-def strip_reasoning(text):
-    # DeepSeek-R1 prefixes its answer with a <think> block
-    return text.rsplit("</think>", 1)[-1].strip()
-
-
 def accept(original, rewrite):
     if not rewrite or len(rewrite) > MAX_LENGTH_RATIO * len(original):
         return False
@@ -53,7 +48,7 @@ class Rewriter:
             message = self.rewrite_chain.invoke({"question": question})
         else:
             message = self.retry_chain.invoke({"question": question, "previous": previous})
-        lines = strip_reasoning(message.text).splitlines()
+        lines = message.text.strip().splitlines()
         rewrite = lines[0].strip().strip("\"'") if lines else ""
         if accept(question, rewrite):
             return rewrite, True

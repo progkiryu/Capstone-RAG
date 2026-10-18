@@ -14,9 +14,7 @@ UNPARSEABLE = {"verdict": "suspicious", "reason": "unparseable judge output"}
 
 
 def judge(question, response, call_model):
-    raw = call_model(JUDGE_PROMPT.format(question=question, response=response))
-    # DeepSeek-R1 prefixes a <think> block
-    raw = raw.rsplit("</think>", 1)[-1].strip()
+    raw = call_model(JUDGE_PROMPT.format(question=question, response=response)).strip()
     try:
         verdict = json.loads(raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip())
     except json.JSONDecodeError:

@@ -1,6 +1,5 @@
 import re
 from langchain_core.prompts import ChatPromptTemplate
-from .rewriter import strip_reasoning
 
 CORRECT, AMBIGUOUS, INCORRECT = "CORRECT", "AMBIGUOUS", "INCORRECT"
 NOT_FOUND = "Not found in context"
@@ -27,7 +26,7 @@ Grade:
 
 
 def parse_grade(text):
-    found = set(re.findall(r"\b(CORRECT|AMBIGUOUS|INCORRECT)\b", strip_reasoning(text).upper()))
+    found = set(re.findall(r"\b(CORRECT|AMBIGUOUS|INCORRECT)\b", text.strip().upper()))
     if len(found) == 1:
         return found.pop(), True
     # fail open: an unreadable grade must never suppress an answer

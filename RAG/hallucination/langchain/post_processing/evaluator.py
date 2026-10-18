@@ -27,8 +27,8 @@ class Evaluator:
             "reference": reference,
             "prediction": claim
         }).text
-        # DeepSeek-R1 prefixes a <think> block; a reply with no number scores 0 instead of crashing
-        match = re.search(r"\d+(?:\.\d+)?", text.rsplit("</think>", 1)[-1])
+        # a reply with no number scores 0 instead of crashing
+        match = re.search(r"\d+(?:\.\d+)?", text)
         return float(match.group()) if match else 0.0
 
     def evaluate(self, question, answer, reference):

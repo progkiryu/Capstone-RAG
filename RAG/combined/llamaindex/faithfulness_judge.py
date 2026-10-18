@@ -28,8 +28,8 @@ Respond with only a JSON array containing one object per claim, for example:
 
 
 def parse_verdicts(text, claim_count):
-    # DeepSeek-R1 prefixes a <think> block; a code fence is the only wrapper tolerated
-    text = text.rsplit("</think>", 1)[-1].strip()
+    # a code fence is the only wrapper tolerated
+    text = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     verdicts = json.loads(fenced.group(1) if fenced else text)
 
